@@ -42,6 +42,40 @@ Keep indention and style consistency in mind and double-check your commit diffs 
      foldmethod=indent tabstop=2 expandtab
     ```
 
+### Emacs settings
+  * **General:**
+    ```
+     (setq require-final-newline t)
+    ```
+  * **Python:**
+    ```
+     (add-hook 'python-mode-hook
+          (lambda ()
+            (setq indent-tabs-mode nil)
+            (setq python-indent-offset 4)
+            (setq flycheck-flake8-args '("--ignore=E501"))))
+    ```
+  * **HTML/CSS:**
+    ```
+     (add-hook 'html-mode-hook (lambda () (setq indent-tabs-mode t)))
+     (add-hook 'css-mode-hook (lambda () (setq indent-tabs-mode t)))
+    ```
+  * **YAML:**
+    ```
+     (add-hook 'yaml-mode-hook
+          (lambda ()
+            (setq indent-tabs-mode nil)
+            (setq yaml-indent-offset 2)))
+    ```
+  * **Markdown:**
+    ```
+     (add-hook 'markdown-mode-hook
+          (lambda ()
+            (setq indent-tabs-mode nil)))
+    ```
+
+**Note**: A `.dir-locals.el` file is included so Emacs uses the correct settings when you open any file in this project.
+
 ## Git pull-request
 
 ### Contribute
