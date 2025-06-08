@@ -1,8 +1,10 @@
 from collections import OrderedDict
 from collections import defaultdict
 
+from flask import flash
 from flask import redirect
 from flask import render_template
+from flask import url_for
 from flask_login import current_user
 from markupsafe import escape
 from sqlalchemy import and_
@@ -38,6 +40,7 @@ from tracker.model.enum import Remote
 from tracker.model.enum import Status
 from tracker.model.package import filter_duplicate_packages
 from tracker.model.package import sort_packages
+from tracker.user import reporter_required
 from tracker.user import user_can_delete_group
 from tracker.user import user_can_delete_issue
 from tracker.user import user_can_edit_group
@@ -45,23 +48,10 @@ from tracker.user import user_can_edit_issue
 from tracker.user import user_can_handle_advisory
 from tracker.user import user_can_watch_log
 from tracker.user import user_can_watch_user_log
+from tracker.util import add_params_to_uri
 from tracker.util import json_response
 from tracker.util import multiline_to_list
 from tracker.view.error import not_found
-
-
-def get_bug_project(databases):
-    bug_project_mapping = {
-        1: ['core', 'core-testing', 'extra', 'extra-testing'],
-        5: ['multilib', 'multilib-testing']
-    }
-
-    for category, repos in bug_project_mapping.items():
-        if all((database in repos for database in databases)):
-            return category
-
-    # Fallback
-    return 1
 
 
 def get_bug_data(cves, pkgs, versions, group):
@@ -89,23 +79,8 @@ def get_bug_data(cves, pkgs, versions, group):
     if TRACKER_SUMMARY_LENGTH_MAX != 0 and len(summary) > TRACKER_SUMMARY_LENGTH_MAX:
         summary = "[{}] [Security] {} (Multiple CVE's)".format(pkg_str, group_type)
 
-    # 5: critical, 4: high, 3: medium, 2: low, 1: very low.
-    severitiy_mapping = {
-        'unknown': 3,
-        'critical': 5,
-        'high': 4,
-        'medium': 3,
-        'low': 2,
-    }
-
-    task_severity = severitiy_mapping.get(group.severity.name)
-    project = get_bug_project((pkg.database for pkg in versions))
-
     return {
-        'project': project,
-        'product_category': 13,  # security
         'item_summary': summary,
-        'task_severity': task_severity,
         'detailed_desc': bug_desc
     }
 
@@ -329,7 +304,6 @@ def show_group(avg):
                            versions=versions,
                            Status=Status,
                            issue_type=issue_type,
-                           bug_data=get_bug_data(issues, packages, versions, group),
                            advisories_pending=data['advisories_pending'],
                            can_edit=user_can_edit_group(advisories),
                            can_delete=user_can_delete_group(advisories),
@@ -592,3 +566,40 @@ def show_log(page=1):
                            CVE=CVE,
                            CVEGroup=CVEGroup,
                            Advisory=Advisory)
+
+
+@tracker.route('/group/<regex("{}"):avg>/create_bug'.format(vulnerability_group_regex[1:-1]), methods=['GET'])
+@tracker.route('/avg/<regex("{}"):avg>/create_bug'.format(vulnerability_group_regex[1:-1]), methods=['GET'])
+@tracker.route('/<regex("{}"):avg>/create_bug'.format(vulnerability_group_regex[1:-1]), methods=['GET'])
+@reporter_required
+def create_bug_ticket_redirect(avg):
+    data = get_group_data(avg)
+    if not data:
+        return not_found()
+
+    group = data['group']
+    issues = data['issues']
+    packages = data['packages']
+    versions = data['versions']
+
+    if group.status != Status.vulnerable:
+        flash('Bug ticket can only be created for vulnerable groups.', 'warning')
+        return redirect(url_for('tracker.show_group', avg=avg))
+
+    pkg_identifier = ''
+    if not versions:
+        pkg_identifier = packages[0].pkgname
+    else:
+        pkg_identifier = versions[0].base
+
+    pkgname = packages[0].pkgname
+    gitlab_url = f"https://gitlab.archlinux.org/archlinux/packaging/packages/{pkgname}/-/issues/new"
+
+    bug_data = get_bug_data(issues, packages, versions, group)
+    params = {
+        'issue[title]': bug_data['item_summary'],
+        'issue[description]': bug_data['detailed_desc']
+    }
+
+    final_url = add_params_to_uri(gitlab_url, params)
+    return redirect(final_url)

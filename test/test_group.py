@@ -1,3 +1,6 @@
+from urllib.parse import parse_qs
+from urllib.parse import urlparse
+
 from flask import url_for
 from werkzeug.exceptions import Forbidden
 from werkzeug.exceptions import NotFound
@@ -11,7 +14,6 @@ from tracker.model.enum import Status
 from tracker.model.enum import UserRole
 from tracker.model.enum import affected_to_status
 from tracker.view.add import ERROR_GROUP_WITH_ISSUE_EXISTS
-from tracker.view.show import get_bug_project
 
 from .conftest import DEFAULT_ADVISORY_ID
 from .conftest import DEFAULT_GROUP_ID
@@ -59,10 +61,6 @@ def set_and_assert_group_data(db, client, route, pkgnames=['foo'], issues=['CVE-
 
     if bug_ticket:
         assert TRACKER_BUGTRACKER_URL.format(bug_ticket) in resp.data.decode('utf-8')
-    else:
-        # Assert project and product category
-        project = get_bug_project([database])
-        assert 'project={}&amp;product_category=13'.format(project) in resp.data.decode('utf-8')
 
 
 @create_package(name='foo')
@@ -481,3 +479,46 @@ def test_edit_group_does_nothing_when_data_is_same(db, client):
 
     group = CVEGroup.query.get(DEFAULT_GROUP_ID)
     assert group.changed == group_changed_old
+
+
+@create_package(name='foo', version='1.2.3-3')
+@create_group(id=DEFAULT_GROUP_ID, issues=[DEFAULT_ISSUE_ID], packages=['foo'], status=Status.vulnerable)
+@logged_in(role=UserRole.reporter)
+def test_create_bug_ticket_redirect_for_vulnerable_group(db, client):
+    """
+    Tests if clicking the 'Create' button for a vulnerable group correctly
+    redirects to a pre-filled GitLab 'New Issue' URL.
+    """
+    resp = client.get(url_for('tracker.create_bug_ticket_redirect', avg=DEFAULT_GROUP_NAME), follow_redirects=False)
+
+    assert 302 == resp.status_code
+
+    location = resp.location
+    parsed_url = urlparse(location)
+
+    assert 'gitlab.archlinux.org' == parsed_url.netloc
+    assert '/archlinux/packaging/packages/foo/-/issues/new' == parsed_url.path
+
+    query_params = parse_qs(parsed_url.query)
+    assert 'issue[title]' in query_params
+    assert 'issue[description]' in query_params
+
+    title = query_params['issue[title]'][0]
+    assert '[foo]' in title
+    assert '[Security]' in title
+    assert f'({DEFAULT_ISSUE_ID})' in title
+
+
+@create_package(name='foo', version='1.2.3-4')
+@create_group(id=DEFAULT_GROUP_ID, issues=[DEFAULT_ISSUE_ID], packages=['foo'], status=Status.fixed)
+@logged_in(role=UserRole.reporter)
+def test_create_bug_ticket_redirect_for_fixed_group_fails(db, client):
+    """
+    Tests that attempting to create a bug for a non-vulnerable group
+    redirects back to the group page with a flash message.
+    """
+    resp = client.get(url_for('tracker.create_bug_ticket_redirect', avg=DEFAULT_GROUP_NAME), follow_redirects=True)
+
+    assert 200 == resp.status_code
+    assert f'<h1>{DEFAULT_GROUP_NAME}' in resp.data.decode('utf-8')
+    assert 'Bug ticket can only be created for vulnerable groups.' in resp.data.decode('utf-8')
